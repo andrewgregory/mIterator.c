@@ -1,0 +1,257 @@
+=head1 NAME
+
+mIterator.c - generic iterator library for C.
+
+=head1 SYNOPSIS
+
+  int *res;
+  mit_t *mit = mit_new(next_fn, &ctx, free_ctx_fn);
+  while((res = mit_next(mit)->value) || mit_is_ready(mit)) {
+    printf("got: %d\n", *res);
+  }
+  if(mit_is_error(mit)) {
+   fputs("Something went wrong: PANIC!\n", stderr);
+  }
+  mit_free(mit);
+
+=head1 DESCRIPTION
+
+=over
+
+=item typedef mit_t;
+
+  typedef struct mit_t mit_t;
+
+=item typedef mit_status_t
+
+  typedef enum mit_status_t {
+    MIT_OK = 0,
+    MIT_ERROR,
+    MIT_EXHAUSTED
+  } mit_status_t;
+
+=item typedef mit_result_t
+
+  typedef struct mit_result_t {
+    mit_status_t status;
+    void *value;
+  } mit_result_t;
+
+=item typedef mit_next_fn_t
+
+  typedef mit_status_t (*mit_next_fn_t)(void *ctx, void **result);
+
+Function used to retrieve the next value.  On success, C<*result> should be set
+to the value and C<MIT_OK> should be returned.  C<MIT_EXHAUSTED> may be
+returned to indicate that there are no more values to retrieve.  C<MIT_ERROR>
+should be returned to indicate an error.  If any value other than C<MIT_OK> is
+returned, C<result> will be discarded and all further attempts to retrieve
+a new value will fail.
+
+=item typedef mit_grep_fn_t
+
+  typedef mit_status_t (*mit_grep_fn_t)(void *value, void *ctx, int *matches);
+
+Function used by C<mit_grep> to construct a filtered iterator.  Indicate
+a match by setting C<*matches>  to true and returning C<0> (C<MIT_OK>).  Any
+other return value will be treated as an error and terminate the iterator.
+
+=item typedef mit_map_fn_t)
+
+  typedef mit_status_t (*mit_map_fn_t)(void *value, void *ctx, void **result);
+
+Function used by C<mit_map> to construct a mapped iterator.  Set C<*result> to
+the new value and return C<0> (C<MIT_OK>) to indicate success.  Any other
+return value will be treated as an error and terminate the iterator.
+
+=item typedef mit_free_fn_t
+
+  typedef void (*mit_free_fn_t)(void *ctx);
+
+=item mit_t *mit_new(mit_next_fn_t next, void *ctx, mit_free_fn_t freefn);
+
+Construct a new iterator.
+
+=item mit_t *mit_finite_new(mit_next_fn_t next, void *ctx, mit_free_fn_t freefn);
+
+Construct a new iterator marked as finite.  NOTE: the iterator's finiteness is
+informational only; B<next> may still return values indefinitely.
+
+=item mit_t *mit_grep(mit_t *mit, mit_grep_fn_t fn, void *ctx, mit_free_fn_t freefn);
+
+Construct a new iterator that wraps C<mit>, only returning values that match
+C<fn>. The wrapped iterator will be automatically freed with new one.
+
+=item mit_t *mit_map(mit_t *mit, mit_map_fn_t fn, void *ctx, mit_free_fn_t freefn);
+
+Construct a new iterator that wraps C<mit>, modifying values with C<fn> before
+returning them. The wrapped iterator will be automatically freed with new one.
+
+=item mit_t *mit_chain(mit_t *mit1, mit_t *mit2);
+
+Construct a new iterator wrapping C<mit1> and C<mit2>.  The wrapped iterators
+will be automatically freed as they are exhaused or when the new one is freed.
+
+=item void mit_free(mit_t *mit);
+
+Free an iterator and, if a C<freefn> was provided at creation, its associated
+context.
+
+=item mit_result_t *mit_next(mit_t *mit);
+
+Retrieve the next value as a result object.  A pointer to an internally stored
+C<mit_result_t> is returned indicated the success of the call and the
+associated value.  If the iterator is exhausted or encountered an error, the
+result value will always be C<NULL>.  Subsequent calls to any retrieval
+function (include C<mit_peek>) will modify the returned result.
+
+=item mit_result_t *mit_peek(mit_t *mit);
+
+Retrieve the next value without removing it or setting the iterator exhaustion
+flag.  But, if an error is encountered, the error flag will be set.  Subsequent
+calls to C<mit_peek> will return the same result without calling C<nextfn>
+again until the value is retrieved with another retrieval function.
+
+=item mit_status_t *mit_skip(mit_t *mit, size_t n);
+
+Retrieve and discard the next C<n> values.
+
+=item mit_result_t *mit_nth(mit_t *mit, size_t n);
+
+Retrieve the C<n>th value from the current position.  Equivalent to:
+
+=item mit_status_t mit_status(mit_t *mit);
+
+Retrieve the current iterator status.
+
+=item int mit_is_ready(mit_t *mit);
+
+Check if the iterator is active.
+
+=item int mit_is_error(mit_t *mit);
+
+Check if the iterator has encountered an error.
+
+=item int mit_is_exhausted(mit_t *mit);
+
+Check if the iterator has been exhausted.
+
+=item int mit_is_finite(mit_t *mit);
+
+Check if the iterator indicates that it will terminate.
+
+=item void *mit_ctx(mit_t *mit);
+
+Get the iterator context.
+
+=back
+
+=head1 EXAMPLES
+
+If C<NULL> is not a valid return value, a simple loop that immediately unpacks
+the value can be used.
+
+  #include "mIterator.c"
+
+  mit_status_t nextfn(void *ctx, void **result) {
+    int *c = ctx;
+    *result = ctx;
+    return ++(*c) > 3 ? MIT_EXHAUSTED : MIT_OK;
+  }
+
+  int main(void) {
+    int ctx = 0, *res;
+    mit_t *mit = mit_new(nextfn, &ctx, NULL);
+
+    while((res = mit_next(mit)->value)) {
+      printf("got: %d\n", *res);
+    }
+    /* check exhaustion because loop may have exited
+     * early if NULL was erroneously returned */
+    if(!mit_is_exhausted(mit)) {
+     fputs("Something went wrong: PANIC!\n", stderr);
+    }
+    mit_free(mit);
+
+    return 0;
+  }
+
+Otherwise, if C<NULL> can be a valid return, the result may be explicitly
+checked and unpacked:
+
+  #include "mIterator.c"
+
+  mit_status_t nextfn(void *ctx, void **result) {
+    int *c = ctx;
+    *result = ctx;
+    return ++(*c) > 3 ? MIT_EXHAUSTED : MIT_OK;
+  }
+
+  int main(void) {
+    int ctx = 0;
+    mit_result_t *result;
+    mit_t *mit = mit_new(nextfn, &ctx, NULL);
+
+    while((result = mit_next(mit)) || result->status == MIT_OK) {
+      int *res = result->value;
+      printf("got: %d\n", *res);
+    }
+    if(mit_is_error(mit)) {
+     fputs("Something went wrong: PANIC!\n", stderr);
+    }
+    mit_free(mit);
+
+    return 0;
+  }
+
+Or C<mit_is_ready> may be used after C<mit_next> to check if a value was
+successfully retrieved:
+
+  #include "mIterator.c"
+
+  mit_status_t nextfn(void *ctx, void **result) {
+    int *c = ctx;
+    *result = ctx;
+    return ++(*c) > 3 ? MIT_EXHAUSTED : MIT_OK;
+  }
+
+  int main(void) {
+    int ctx = 0, *res;
+    mit_t *mit = mit_new(nextfn, &ctx, NULL);
+
+    while((res = mit_next(mit)->value) || mit_is_ready(mit)) {
+      printf("got: %d\n", *res);
+    }
+    if(mit_is_error(mit)) {
+     fputs("Something went wrong: PANIC!\n", stderr);
+    }
+    mit_free(mit);
+
+    return 0;
+  }
+
+=head1 COPYRIGHT AND LICENSE
+
+Copyright 2021 Andrew Gregory <andrew.gregory.8@gmail.com>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+of the Software, and to permit persons to whom the Software is furnished to do
+so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+=head1 SEE ALSO
+
+Project URL: L<http://github.com/andrewgregory/mIterator.c>
